@@ -1419,9 +1419,17 @@
         </div>
     </footer>
 
+    <!-- Add Supabase CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
     <script>
-        // API Configuration
-        const API_BASE_URL = 'https://your-backend-url.up.railway.app/api'; // UPDATE THIS WITH YOUR ACTUAL BACKEND URL
+        // Supabase Configuration - Using your actual project details
+        const SUPABASE_URL = 'https://fdwsdimgamlychlvbkh.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkd3NkaW1nYW1sY3lobGJ2YmtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE2MzczODIyMSwiZXhwIjoyMDc5MzE0MjIxfQ.e7mEVy7lithb37Z4K0-gclBr1Ufh_lJ7jslSYSfGqQQ';
+
+        // Initialize Supabase client
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
         let currentUser = null;
         let authToken = null;
 
@@ -1433,25 +1441,22 @@
         async function initializeApp() {
             checkAuthStatus();
             setupEventListeners();
-            await checkBackendHealth();
+            await checkSupabaseConnection();
             
             console.log('🎯 QuizMaster Pro Initialized');
             console.log('🌐 Frontend: Live on Netlify');
-            console.log('🔗 Backend API:', API_BASE_URL);
+            console.log('🔗 Supabase: Connected successfully');
         }
 
-        // Check backend health
-        async function checkBackendHealth() {
+        // Check Supabase connection
+        async function checkSupabaseConnection() {
             try {
-                const response = await fetch(API_BASE_URL.replace('/api', '/health'));
-                if (response.ok) {
-                    console.log('✅ Backend is healthy');
-                } else {
-                    console.warn('⚠️ Backend health check failed');
-                }
+                const { data, error } = await supabaseClient.from('users').select('count').limit(1);
+                if (error) throw error;
+                console.log('✅ Supabase connection successful');
             } catch (error) {
-                console.error('❌ Backend is unreachable:', error);
-                showNotification('Backend service is temporarily unavailable. Some features may not work.', 'warning');
+                console.error('❌ Supabase connection failed:', error);
+                showNotification('Database connection issue. Some features may not work.', 'warning');
             }
         }
 
@@ -1464,7 +1469,7 @@
                 authToken = token;
                 currentUser = JSON.parse(user);
                 showDashboard();
-                showNotification(`Welcome back, ${currentUser.full_name}!`, 'success');
+                showNotification(`Welcome back, ${currentUser.user_metadata?.full_name || currentUser.email}!`, 'success');
             }
         }
 
@@ -1543,43 +1548,6 @@
             }
         }
 
-        // API call helper with error handling
-        async function apiCall(endpoint, options = {}) {
-            const url = `${API_BASE_URL}${endpoint}`;
-            
-            try {
-                console.log(`📡 API Call: ${url}`);
-                
-                const response = await fetch(url, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': authToken ? `Bearer ${authToken}` : '',
-                        ...options.headers
-                    },
-                    ...options
-                });
-
-                const data = await response.json();
-                
-                if (!response.ok) {
-                    throw new Error(data.message || `HTTP ${response.status}`);
-                }
-                
-                return data;
-                
-            } catch (error) {
-                console.error('API Call Failed:', error);
-                
-                if (error.name === 'TypeError' && error.message.includes('fetch')) {
-                    showNotification('Network error: Please check your internet connection', 'error');
-                } else {
-                    showNotification(error.message || 'Service temporarily unavailable', 'error');
-                }
-                
-                throw error;
-            }
-        }
-
         // Authentication handlers
         async function handleLogin() {
             const email = document.getElementById('login-email').value;
@@ -1596,23 +1564,26 @@
                 button.innerHTML = '<div class="loading-spinner"></div> Logging in...';
                 button.disabled = true;
 
-                const data = await apiCall('/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({ email, password })
+                // Use Supabase directly for authentication
+                const { data, error } = await supabaseClient.auth.signInWithPassword({
+                    email: email,
+                    password: password
                 });
 
-                if (data.success) {
-                    authToken = data.data.token;
-                    currentUser = data.data.user;
-                    
-                    localStorage.setItem('quizmaster_token', authToken);
-                    localStorage.setItem('quizmaster_user', JSON.stringify(currentUser));
-                    
-                    showNotification('Login successful! Welcome back!', 'success');
-                    showDashboard();
-                }
+                if (error) throw error;
+
+                // Store user data
+                currentUser = data.user;
+                authToken = data.session.access_token;
+                
+                localStorage.setItem('quizmaster_token', authToken);
+                localStorage.setItem('quizmaster_user', JSON.stringify(currentUser));
+                
+                showNotification('Login successful! Welcome back!', 'success');
+                showDashboard();
+                
             } catch (error) {
-                // Error handled in apiCall
+                showNotification(error.message, 'error');
             } finally {
                 const button = document.getElementById('login-submit');
                 button.innerHTML = originalText;
@@ -1648,23 +1619,24 @@
                 button.innerHTML = '<div class="loading-spinner"></div> Creating account...';
                 button.disabled = true;
 
-                const data = await apiCall('/auth/register', {
-                    method: 'POST',
-                    body: JSON.stringify({ full_name, email, password })
+                // Use Supabase directly for registration
+                const { data, error } = await supabaseClient.auth.signUp({
+                    email: email,
+                    password: password,
+                    options: {
+                        data: {
+                            full_name: full_name
+                        }
+                    }
                 });
 
-                if (data.success) {
-                    authToken = data.data.token;
-                    currentUser = data.data.user;
-                    
-                    localStorage.setItem('quizmaster_token', authToken);
-                    localStorage.setItem('quizmaster_user', JSON.stringify(currentUser));
-                    
-                    showNotification('Account created successfully! Welcome to QuizMaster Pro!', 'success');
-                    showDashboard();
-                }
+                if (error) throw error;
+
+                showNotification('Account created successfully! Please check your email for verification.', 'success');
+                switchAuthTab('login');
+                
             } catch (error) {
-                // Error handled in apiCall
+                showNotification(error.message, 'error');
             } finally {
                 const button = document.getElementById('register-submit');
                 button.innerHTML = originalText;
@@ -1680,7 +1652,13 @@
                 return;
             }
 
-            showNotification('Password reset feature coming soon! For now, please contact our support team.', 'info');
+            try {
+                const { error } = await supabaseClient.auth.resetPasswordForEmail(email);
+                if (error) throw error;
+                showNotification('Password reset instructions sent to your email!', 'success');
+            } catch (error) {
+                showNotification(error.message, 'error');
+            }
         }
 
         // Dashboard functions
@@ -1689,9 +1667,9 @@
 
             try {
                 // Update profile information
-                document.getElementById('profile-name').textContent = currentUser.full_name;
+                document.getElementById('profile-name').textContent = currentUser.user_metadata?.full_name || 'Not set';
                 document.getElementById('profile-email').textContent = currentUser.email;
-                document.getElementById('profile-joined').textContent = new Date().toLocaleDateString();
+                document.getElementById('profile-joined').textContent = new Date(currentUser.created_at).toLocaleDateString();
                 
                 // In a real app, you would fetch this data from the backend
                 document.getElementById('profile-total').textContent = '0';
