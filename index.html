@@ -42,6 +42,28 @@
             padding: 0 20px;
         }
 
+        /* Connection Status */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 10001;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            background: var(--danger);
+            color: white;
+        }
+
+        .connection-status.connected {
+            background: var(--success);
+        }
+
+        .connection-status.connecting {
+            background: var(--warning);
+        }
+
         /* Header Styles */
         header {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
@@ -934,6 +956,11 @@
     </style>
 </head>
 <body>
+    <!-- Connection Status -->
+    <div id="connection-status" class="connection-status">
+        <i class="fas fa-sync fa-spin"></i> Testing Database Connection...
+    </div>
+
     <!-- Header -->
     <header>
         <div class="container">
@@ -1423,15 +1450,23 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <script>
-        // Supabase Configuration - Using your actual project details
-        const SUPABASE_URL = 'https://fdwsdimgamlychlvbkh.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkd3NkaW1nYW1sY3lobGJ2YmtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE2MzczODIyMSwiZXhwIjoyMDc5MzE0MjIxfQ.e7mEVy7lithb37Z4K0-gclBr1Ufh_lJ7jslSYSfGqQQ';
+        // Enhanced Supabase Configuration with better error handling
+        const SUPABASE_CONFIG = {
+            url: 'https://fdwsdimgamlychlvbkh.supabase.co',
+            key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkd3NkaW1nYW1sY3lobGJ2YmtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE2MzczODIyMSwiZXhwIjoyMDc5MzE0MjIxfQ.e7mEVy7lithb37Z4K0-gclBr1Ufh_lJ7jslSYSfGqQQ'
+        };
 
-        // Initialize Supabase client
-        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        // Initialize Supabase client with better configuration
+        const supabaseClient = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key, {
+            auth: {
+                autoRefreshToken: true,
+                persistSession: true,
+                detectSessionInUrl: true
+            }
+        });
 
         let currentUser = null;
-        let authToken = null;
+        let isConnected = false;
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
@@ -1439,37 +1474,85 @@
         });
 
         async function initializeApp() {
-            checkAuthStatus();
             setupEventListeners();
             await checkSupabaseConnection();
+            checkAuthStatus();
             
             console.log('🎯 QuizMaster Pro Initialized');
-            console.log('🌐 Frontend: Live on Netlify');
-            console.log('🔗 Supabase: Connected successfully');
         }
 
-        // Check Supabase connection
+        // Enhanced connection check
         async function checkSupabaseConnection() {
+            const statusElement = document.getElementById('connection-status');
+            
             try {
-                const { data, error } = await supabaseClient.from('users').select('count').limit(1);
-                if (error) throw error;
+                statusElement.innerHTML = '<i class="fas fa-sync fa-spin"></i> Testing connection...';
+                statusElement.className = 'connection-status';
+
+                // Test the connection by making a simple auth call
+                const { data, error } = await supabaseClient.auth.getSession();
+                
+                if (error) {
+                    console.error('Supabase connection test failed:', error);
+                    throw error;
+                }
+
+                // If we get here, connection is successful
+                isConnected = true;
+                statusElement.innerHTML = '<i class="fas fa-wifi"></i> Connected to Database';
+                statusElement.className = 'connection-status connected';
+                
                 console.log('✅ Supabase connection successful');
+                return true;
+                
             } catch (error) {
+                isConnected = false;
+                statusElement.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Connection Failed - Click to retry';
+                statusElement.className = 'connection-status disconnected';
+                statusElement.style.cursor = 'pointer';
+                statusElement.onclick = retryConnection;
+                
                 console.error('❌ Supabase connection failed:', error);
-                showNotification('Database connection issue. Some features may not work.', 'warning');
+                
+                // Show detailed error information
+                let errorMessage = 'Cannot connect to database. ';
+                
+                if (error.message.includes('Failed to fetch')) {
+                    errorMessage += 'Network error - please check your internet connection and CORS settings.';
+                } else if (error.message.includes('CORS')) {
+                    errorMessage += 'CORS error - please check Supabase project configuration.';
+                } else if (error.message.includes('JWT')) {
+                    errorMessage += 'Authentication error - please check your API keys.';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                showNotification(errorMessage, 'error');
+                return false;
             }
         }
 
+        // Retry connection function
+        async function retryConnection() {
+            await checkSupabaseConnection();
+        }
+
         // Check authentication status
-        function checkAuthStatus() {
-            const token = localStorage.getItem('quizmaster_token');
-            const user = localStorage.getItem('quizmaster_user');
-            
-            if (token && user) {
-                authToken = token;
-                currentUser = JSON.parse(user);
-                showDashboard();
-                showNotification(`Welcome back, ${currentUser.user_metadata?.full_name || currentUser.email}!`, 'success');
+        async function checkAuthStatus() {
+            try {
+                const { data, error } = await supabaseClient.auth.getUser();
+                
+                if (error) throw error;
+                
+                if (data.user) {
+                    currentUser = data.user;
+                    showDashboard();
+                    showNotification(`Welcome back, ${currentUser.user_metadata?.full_name || currentUser.email}!`, 'success');
+                }
+            } catch (error) {
+                console.log('No active session found');
+                // Clear any invalid tokens
+                localStorage.removeItem('supabase.auth.token');
             }
         }
 
@@ -1548,8 +1631,13 @@
             }
         }
 
-        // Authentication handlers
+        // Enhanced authentication handlers
         async function handleLogin() {
+            if (!isConnected) {
+                showNotification('Cannot connect to database. Please check your internet connection.', 'error');
+                return;
+            }
+
             const email = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
 
@@ -1564,34 +1652,48 @@
                 button.innerHTML = '<div class="loading-spinner"></div> Logging in...';
                 button.disabled = true;
 
-                // Use Supabase directly for authentication
+                console.log('Attempting login for:', email);
+
                 const { data, error } = await supabaseClient.auth.signInWithPassword({
                     email: email,
                     password: password
                 });
 
-                if (error) throw error;
+                if (error) {
+                    console.error('Login error:', error);
+                    throw error;
+                }
 
-                // Store user data
                 currentUser = data.user;
-                authToken = data.session.access_token;
-                
-                localStorage.setItem('quizmaster_token', authToken);
-                localStorage.setItem('quizmaster_user', JSON.stringify(currentUser));
-                
                 showNotification('Login successful! Welcome back!', 'success');
                 showDashboard();
                 
             } catch (error) {
-                showNotification(error.message, 'error');
+                console.error('Login failed:', error);
+                
+                let errorMessage = 'Login failed. ';
+                if (error.message.includes('Invalid login credentials')) {
+                    errorMessage = 'Invalid email or password. Please try again.';
+                } else if (error.message.includes('Email not confirmed')) {
+                    errorMessage = 'Please check your email to confirm your account.';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                showNotification(errorMessage, 'error');
             } finally {
                 const button = document.getElementById('login-submit');
-                button.innerHTML = originalText;
+                button.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login to Account';
                 button.disabled = false;
             }
         }
 
         async function handleRegister() {
+            if (!isConnected) {
+                showNotification('Cannot connect to database. Please check your internet connection.', 'error');
+                return;
+            }
+
             const full_name = document.getElementById('register-name').value;
             const email = document.getElementById('register-email').value;
             const password = document.getElementById('register-password').value;
@@ -1619,7 +1721,8 @@
                 button.innerHTML = '<div class="loading-spinner"></div> Creating account...';
                 button.disabled = true;
 
-                // Use Supabase directly for registration
+                console.log('Attempting registration for:', email);
+
                 const { data, error } = await supabaseClient.auth.signUp({
                     email: email,
                     password: password,
@@ -1630,16 +1733,38 @@
                     }
                 });
 
-                if (error) throw error;
+                if (error) {
+                    console.error('Registration error:', error);
+                    throw error;
+                }
 
-                showNotification('Account created successfully! Please check your email for verification.', 'success');
-                switchAuthTab('login');
+                if (data.user) {
+                    showNotification('Account created successfully! Please check your email for verification.', 'success');
+                    switchAuthTab('login');
+                    
+                    // Clear form
+                    document.getElementById('register-name').value = '';
+                    document.getElementById('register-email').value = '';
+                    document.getElementById('register-password').value = '';
+                    document.getElementById('register-confirm-password').value = '';
+                }
                 
             } catch (error) {
-                showNotification(error.message, 'error');
+                console.error('Registration failed:', error);
+                
+                let errorMessage = 'Registration failed. ';
+                if (error.message.includes('User already registered')) {
+                    errorMessage = 'An account with this email already exists. Please login instead.';
+                } else if (error.message.includes('Password')) {
+                    errorMessage = 'Password does not meet requirements.';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                showNotification(errorMessage, 'error');
             } finally {
                 const button = document.getElementById('register-submit');
-                button.innerHTML = originalText;
+                button.innerHTML = '<i class="fas fa-user-plus"></i> Create Account';
                 button.disabled = false;
             }
         }
@@ -1684,11 +1809,6 @@
         async function startQuiz() {
             if (!currentUser) {
                 showLoginForm();
-                return;
-            }
-
-            if (!currentUser.is_active) {
-                showNotification('Please activate your account to start answering questions', 'warning');
                 return;
             }
 
@@ -1781,9 +1901,7 @@
         }
 
         function logout() {
-            localStorage.removeItem('quizmaster_token');
-            localStorage.removeItem('quizmaster_user');
-            authToken = null;
+            supabaseClient.auth.signOut();
             currentUser = null;
             showNotification('Logged out successfully', 'success');
             showHome();
@@ -1800,11 +1918,16 @@
             notification.innerHTML = `
                 <div class="notification-content">
                     <span class="notification-message">${message}</span>
-                    <button class="notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
+                    <button class="notification-close">×</button>
                 </div>
             `;
 
             document.body.appendChild(notification);
+
+            // Add close functionality
+            notification.querySelector('.notification-close').addEventListener('click', function() {
+                notification.remove();
+            });
 
             // Auto-remove after 5 seconds
             setTimeout(() => {
@@ -1817,6 +1940,7 @@
         // Make functions globally available
         window.showDashboard = showDashboard;
         window.showHome = showHome;
+        window.retryConnection = retryConnection;
     </script>
 </body>
 </html>
